@@ -1,0 +1,60 @@
+# Claude Computer Use Assistant - File Listing
+# This file lists all created files with their sizes for verification
+
+## Project Structure with File Sizes:
+
+claude_gui/
+├── main.py                    (1.5 KB) - Application entry point
+├── config.py                  (2.1 KB) - Configuration settings  
+├── requirements.txt           (0.3 KB) - Dependencies
+├── .env.example              (0.8 KB) - Environment template
+├── README.md                 (8.9 KB) - Documentation
+│
+├── core/                     (Core business logic)
+│   ├── __init__.py           (0.1 KB) - Package marker
+│   ├── claude_client.py      (4.2 KB) - Claude API integration
+│   ├── computer_actions.py   (2.3 KB) - Computer automation
+│   ├── file_operations.py    (5.8 KB) - File operations
+│   └── web_operations.py     (4.9 KB) - Web operations
+│
+├── gui/                      (User interface components)
+│   ├── __init__.py           (0.1 KB) - Package marker
+│   ├── main_window.py        (11.2 KB) - Main window & menus
+│   ├── chat_panel.py         (12.8 KB) - Chat interface
+│   ├── control_panel.py      (21.0 KB) - Control tabs & tools
+│   └── dialogs.py            (20.3 KB) - Configuration & help dialogs
+│
+└── utils/                    (Utility functions)
+    ├── __init__.py           (0.1 KB) - Package marker  
+    ├── history_manager.py    (4.8 KB) - Message history
+    ├── screenshot.py         (2.1 KB) - Screenshot utilities
+    └── logging.py            (1.2 KB) - Action logging
+
+## Key Files Created:
+
+✓ control_panel.py - Contains ControlPanel class with 4 tabs:
+  - Screenshot tab (take/auto screenshots)
+  - File Operations tab (read/write/browse files)
+  - Web Operations tab (load pages/extract content)
+  - Action Log tab (view/export logs)
+
+✓ dialogs.py - Contains 3 dialog classes:
+  - ConfigDialog (settings with tabbed interface)
+  - AboutDialog (application information)
+  - HelpDialog (comprehensive help system)
+
+✓ chat_panel.py - Chat interface with Claude integration
+✓ main_window.py - Main application window with menu system
+
+## Total Files: 18 Python files + 3 documentation files = 21 files
+
+## To verify files exist:
+1. Navigate to the claude_gui directory
+2. Check that all subdirectories (core/, gui/, utils/) exist
+3. Verify each .py file is present and has content
+4. Both control_panel.py (21KB) and dialogs.py (20KB) should be visible
+
+## If files are missing:
+- Check you're in the correct directory
+- Refresh your file explorer
+- Try running: ls -la (Linux/Mac) or dir (Windows) in the claude_gui folder

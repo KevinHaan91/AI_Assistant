@@ -585,8 +585,8 @@ class ClaudeGUI:
         timestamp = time.strftime("%H:%M:%S")
         self.actions_log.insert(tk.END, f"[{timestamp}] {action}\n")
 
-        def clear_actions_log(self):
-            """Clear the actions log"""
+    def clear_actions_log(self):
+        """Clear the actions log"""
         self.actions_log.config(state=tk.NORMAL)
         self.actions_log.delete(1.0, tk.END)
         self.actions_log.config(state=tk.DISABLED)

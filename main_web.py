@@ -52,7 +52,6 @@ class ClaudeGUI:
         # Message history management
         self.message_history = deque(maxlen=20)  # Keep last 20 messages
         self.history_file = Path("claude_chat_history.json")
-        self.load_message_history()
         
         # Browser session
         self.browser_session = requests.Session()
@@ -61,6 +60,7 @@ class ClaudeGUI:
         })
         
         self.setup_ui()
+        self.load_message_history()
         
     def load_message_history(self):
         """Load message history from file"""

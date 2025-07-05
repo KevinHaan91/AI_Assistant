@@ -584,3 +584,549 @@ class ClaudeGUI:
         self.actions_log.config(state=tk.NORMAL)
         timestamp = time.strftime("%H:%M:%S")
         self.actions_log.insert(tk.END, f"[{timestamp}] {action}\n")
+
+        def clear_actions_log(self):
+            """Clear the actions log"""
+        self.actions_log.config(state=tk.NORMAL)
+        self.actions_log.delete(1.0, tk.END)
+        self.actions_log.config(state=tk.DISABLED)
+        
+    def take_screenshot_gui(self):
+        """Take a screenshot and display preview"""
+        try:
+            self.status_var.set("Taking screenshot...")
+            self.root.update()
+            
+            # Take screenshot
+            screenshot = pyautogui.screenshot()
+            self.current_screenshot = screenshot
+            
+            # Create thumbnail for preview
+            thumbnail = screenshot.copy()
+            thumbnail.thumbnail((200, 150), Image.Resampling.LANCZOS)
+            
+            # Convert to PhotoImage
+            photo = ImageTk.PhotoImage(thumbnail)
+            
+            # Update preview
+            self.screenshot_label.configure(image=photo)
+            self.screenshot_label.image = photo  # Keep a reference
+            
+            self.add_action_log("Screenshot taken")
+            self.status_var.set("Screenshot ready")
+            
+        except Exception as e:
+            self.add_action_log(f"Screenshot error: {str(e)}")
+            self.status_var.set("Screenshot failed")
+            
+    def send_message(self, event=None):
+        """Send a message to Claude"""
+        if self.is_processing:
+            return
+            
+        message = self.message_var.get().strip()
+        if not message:
+            return
+            
+        if not self.client:
+            messagebox.showerror("Error", "Claude client not initialized. Check your API key.")
+            return
+            
+        self.message_var.set("")
+        self.add_chat_message("You", message)
+        
+        # Process in background thread
+        threading.Thread(target=self.process_message, args=(message,), daemon=True).start()
+        
+    def process_message(self, message):
+        """Process message with Claude in background thread"""
+        self.is_processing = True
+        self.root.after(0, lambda: self.status_var.set("Processing..."))
+        
+        try:
+            # Prepare message for Claude with context
+            context = self.get_conversation_context()
+            full_message = f"{context}{message}"
+            
+            # Add page context if available
+            if self.current_page_content:
+                full_message += f"\n\nCurrent page content:\n{self.current_page_content[:2000]}..."
+            
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": full_message}
+                    ]
+                }
+            ]
+            
+            # Add screenshot if available
+            if self.current_screenshot:
+                buffer = io.BytesIO()
+                self.current_screenshot.save(buffer, format='PNG')
+                img_str = base64.b64encode(buffer.getvalue()).decode()
+                
+                messages[0]["content"].append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": img_str
+                    }
+                })
+            
+            # Send to Claude
+            response = self.client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=1024,
+                messages=messages,
+                tools=[
+                    {
+                        "name": "computer",
+                        "description": "Use a computer to perform actions",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {
+                                "action": {
+                                    "type": "string",
+                                    "enum": ["click", "type", "scroll", "key", "move", "screenshot"]
+                                },
+                                "coordinate": {
+                                    "type": "array",
+                                    "items": {"type": "integer"},
+                                    "description": "[x, y] coordinates for click/move actions"
+                                },
+                                "text": {
+                                    "type": "string",
+                                    "description": "Text to type"
+                                },
+                                "key": {
+                                    "type": "string",
+                                    "description": "Key to press"
+                                },
+                                "clicks": {
+                                    "type": "integer",
+                                    "description": "Number of scroll clicks"
+                                }
+                            },
+                            "required": ["action"]
+                        }
+                    },
+                    {
+                        "name": "file_operations",
+                        "description": "Perform file operations",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {
+                                "operation": {
+                                    "type": "string",
+                                    "enum": ["read", "write", "list", "delete", "copy", "move"]
+                                },
+                                "file_path": {"type": "string"},
+                                "content": {"type": "string"},
+                                "dest_path": {"type": "string"},
+                                "mode": {"type": "string", "enum": ["w", "a"]}
+                            },
+                            "required": ["operation", "file_path"]
+                        }
+                    },
+                    {
+                        "name": "web_operations",
+                        "description": "Perform web operations",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {
+                                "operation": {
+                                    "type": "string",
+                                    "enum": ["load_page", "get_content", "search_elements", "extract_links"]
+                                },
+                                "url": {"type": "string"},
+                                "selector": {"type": "string"},
+                                "search_text": {"type": "string"}
+                            },
+                            "required": ["operation"]
+                        }
+                    }
+                ]
+            )
+            
+            # Display Claude's response
+            claude_text = response.content[0].text if response.content else "No response"
+            self.root.after(0, lambda: self.add_chat_message("Claude", claude_text))
+            
+            # Execute any tool calls
+            if response.stop_reason == "tool_use":
+                for tool_call in response.content:
+                    if tool_call.type == "tool_use":
+                        self.root.after(0, lambda tc=tool_call: self.execute_tool_call(tc))
+            
+        except Exception as e:
+            error_msg = f"Error: {str(e)}"
+            self.root.after(0, lambda: self.add_chat_message("System", error_msg))
+        
+        finally:
+            self.is_processing = False
+            self.root.after(0, lambda: self.status_var.set("Ready"))
+            
+    def execute_tool_call(self, tool_call):
+        """Execute a tool call from Claude"""
+        try:
+            if tool_call.name == "computer":
+                result = self.execute_computer_action(tool_call.input)
+            elif tool_call.name == "file_operations":
+                result = self.execute_file_operation(tool_call.input)
+            elif tool_call.name == "web_operations":
+                result = self.execute_web_operation(tool_call.input)
+            else:
+                result = f"Unknown tool: {tool_call.name}"
+            
+            self.add_action_log(result)
+            
+        except Exception as e:
+            error_msg = f"Tool execution error: {str(e)}"
+            self.add_action_log(error_msg)
+            
+    def execute_computer_action(self, action_data):
+        """Execute computer actions"""
+        action_type = action_data.get("action")
+        
+        if action_type == "click":
+            x, y = action_data.get("coordinate", [0, 0])
+            pyautogui.click(x, y)
+            return f"Clicked at ({x}, {y})"
+        
+        elif action_type == "type":
+            text = action_data.get("text", "")
+            pyautogui.write(text)
+            return f"Typed: {text}"
+        
+        elif action_type == "scroll":
+            clicks = action_data.get("clicks", 3)
+            pyautogui.scroll(clicks)
+            return f"Scrolled {clicks} clicks"
+        
+        elif action_type == "key":
+            key = action_data.get("key")
+            pyautogui.press(key)
+            return f"Pressed key: {key}"
+        
+        elif action_type == "move":
+            x, y = action_data.get("coordinate", [0, 0])
+            pyautogui.moveTo(x, y)
+            return f"Moved mouse to ({x}, {y})"
+        
+        elif action_type == "screenshot":
+            self.take_screenshot_gui()
+            return "Screenshot taken"
+        
+        else:
+            return f"Unknown action: {action_type}"
+    
+    def execute_web_operation(self, web_data):
+        """Execute web operations"""
+        operation = web_data.get("operation")
+        
+        if operation == "load_page":
+            url = web_data.get("url")
+            if url:
+                self.url_var.set(url)
+                threading.Thread(target=self.load_page, args=(url,), daemon=True).start()
+                return f"Loading page: {url}"
+            else:
+                return "No URL provided for load_page operation"
+        
+        elif operation == "get_content":
+            if self.current_page_content:
+                return f"Current page content available ({len(self.current_page_content)} characters)"
+            else:
+                return "No page content available"
+        
+        elif operation == "search_elements":
+            search_text = web_data.get("search_text")
+            if self.current_page_content and search_text:
+                if search_text.lower() in self.current_page_content.lower():
+                    return f"Found '{search_text}' in current page content"
+                else:
+                    return f"'{search_text}' not found in current page content"
+            else:
+                return "No page content or search text provided"
+        
+        elif operation == "extract_links":
+            if self.current_page_source:
+                soup = BeautifulSoup(self.current_page_source, 'html.parser')
+                links = []
+                for link in soup.find_all('a', href=True):
+                    href = link['href']
+                    text = link.get_text(strip=True)
+                    if href.startswith('http') or href.startswith('/'):
+                        links.append(f"{text}: {href}")
+                return f"Found {len(links)} links: {links[:10]}"  # Return first 10 links
+            else:
+                return "No page source available"
+        
+        else:
+            return f"Unknown web operation: {operation}"
+            
+    def execute_file_operation(self, file_data):
+        """Execute file operations"""
+        operation = file_data.get("operation")
+        file_path = file_data.get("file_path")
+        
+        if operation == "read":
+            return self.read_file(file_path)
+        elif operation == "write":
+            content = file_data.get("content", "")
+            mode = file_data.get("mode", "w")
+            return self.write_file(file_path, content, mode)
+        elif operation == "list":
+            return self.list_directory(file_path)
+        elif operation == "delete":
+            return self.delete_file(file_path)
+        elif operation == "copy":
+            dest_path = file_data.get("dest_path")
+            return self.copy_file(file_path, dest_path)
+        elif operation == "move":
+            dest_path = file_data.get("dest_path")
+            return self.move_file(file_path, dest_path)
+        else:
+            return f"Unknown file operation: {operation}"
+    
+    # File operation methods
+    def read_file(self, file_path):
+        """Read content from a file"""
+        try:
+            path = Path(file_path)
+            if not path.exists():
+                return f"File not found: {file_path}"
+            
+            if path.is_dir():
+                return f"Path is a directory: {file_path}"
+            
+            # Handle different file types
+            if path.suffix.lower() in ['.jpg', '.jpeg', '.png', '.gif', '.bmp']:
+                return f"Image file detected: {file_path}"
+            elif path.suffix.lower() in ['.exe', '.dll', '.bin']:
+                return f"Binary file detected: {file_path}"
+            
+            with open(path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # Show content in a new window if it's long
+            if len(content) > 1000:
+                self.show_file_content(file_path, content)
+                return f"Read {len(content)} characters from {file_path} - displayed in new window"
+            else:
+                return f"File content ({len(content)} chars): {content[:500]}..."
+            
+        except Exception as e:
+            return f"Error reading file: {str(e)}"
+    
+    def show_file_content(self, file_path, content):
+        """Show file content in a new window"""
+        def create_window():
+            content_window = tk.Toplevel(self.root)
+            content_window.title(f"File Content - {Path(file_path).name}")
+            content_window.geometry("700x500")
+            content_window.configure(bg='#2b2b2b')
+            
+            # Create text widget with scrollbar
+            text_frame = ttk.Frame(content_window)
+            text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+            
+            content_text = scrolledtext.ScrolledText(text_frame, wrap=tk.WORD, 
+                                                   font=('Consolas', 10), 
+                                                   bg='#f8f8f8', fg='black')
+            content_text.pack(fill=tk.BOTH, expand=True)
+            
+            # Insert content
+            content_text.insert(tk.END, f"File: {file_path}\n")
+            content_text.insert(tk.END, f"Size: {len(content)} characters\n")
+            content_text.insert(tk.END, "=" * 50 + "\n\n")
+            content_text.insert(tk.END, content)
+            
+            content_text.config(state=tk.DISABLED)
+        
+        # Schedule window creation on main thread
+        self.root.after(0, create_window)
+    
+    def write_file(self, file_path, content, mode='w'):
+        """Write content to a file"""
+        try:
+            path = Path(file_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            
+            with open(path, mode, encoding='utf-8') as f:
+                f.write(content)
+            return f"Content written to: {file_path} ({len(content)} characters)"
+            
+        except Exception as e:
+            return f"Error writing file: {str(e)}"
+    
+    def list_directory(self, dir_path="."):
+        """List contents of a directory"""
+        try:
+            path = Path(dir_path)
+            if not path.exists():
+                return f"Directory not found: {dir_path}"
+            
+            if not path.is_dir():
+                return f"Path is not a directory: {dir_path}"
+            
+            items = []
+            for item in path.iterdir():
+                if item.is_dir():
+                    items.append(f"[DIR] {item.name}")
+                else:
+                    size = item.stat().st_size
+                    items.append(f"[FILE] {item.name} ({size} bytes)")
+            
+            # Show in new window if many items
+            if len(items) > 20:
+                self.show_directory_listing(dir_path, items)
+                return f"Listed {len(items)} items in {dir_path} - displayed in new window"
+            else:
+                return f"Directory contents ({len(items)} items):\n" + "\n".join(items[:20])
+            
+        except Exception as e:
+            return f"Error listing directory: {str(e)}"
+    
+    def show_directory_listing(self, dir_path, items):
+        """Show directory listing in a new window"""
+        def create_window():
+            listing_window = tk.Toplevel(self.root)
+            listing_window.title(f"Directory Listing - {dir_path}")
+            listing_window.geometry("600x400")
+            listing_window.configure(bg='#2b2b2b')
+            
+            # Create text widget with scrollbar
+            text_frame = ttk.Frame(listing_window)
+            text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+            
+            listing_text = scrolledtext.ScrolledText(text_frame, wrap=tk.WORD, 
+                                                   font=('Consolas', 10), 
+                                                   bg='#f8f8f8', fg='black')
+            listing_text.pack(fill=tk.BOTH, expand=True)
+            
+            # Insert listing
+            listing_text.insert(tk.END, f"Directory: {dir_path}\n")
+            listing_text.insert(tk.END, f"Items: {len(items)}\n")
+            listing_text.insert(tk.END, "=" * 50 + "\n\n")
+            
+            for item in items:
+                listing_text.insert(tk.END, f"{item}\n")
+            
+            listing_text.config(state=tk.DISABLED)
+        
+        # Schedule window creation on main thread
+        self.root.after(0, create_window)
+    
+    def delete_file(self, file_path):
+        """Delete a file"""
+        try:
+            path = Path(file_path)
+            if not path.exists():
+                return f"File not found: {file_path}"
+            
+            if path.is_dir():
+                shutil.rmtree(path)
+                return f"Directory deleted: {file_path}"
+            else:
+                path.unlink()
+                return f"File deleted: {file_path}"
+                
+        except Exception as e:
+            return f"Error deleting file: {str(e)}"
+    
+    def copy_file(self, source_path, dest_path):
+        """Copy a file"""
+        try:
+            source = Path(source_path)
+            dest = Path(dest_path)
+            
+            if not source.exists():
+                return f"Source file not found: {source_path}"
+            
+            if source.is_dir():
+                shutil.copytree(source, dest)
+                return f"Directory copied: {source_path} -> {dest_path}"
+            else:
+                shutil.copy2(source, dest)
+                return f"File copied: {source_path} -> {dest_path}"
+                
+        except Exception as e:
+            return f"Error copying file: {str(e)}"
+    
+    def move_file(self, source_path, dest_path):
+        """Move a file"""
+        try:
+            source = Path(source_path)
+            dest = Path(dest_path)
+            
+            if not source.exists():
+                return f"Source file not found: {source_path}"
+            
+            shutil.move(str(source), str(dest))
+            return f"File moved: {source_path} -> {dest_path}"
+            
+        except Exception as e:
+            return f"Error moving file: {str(e)}"
+    
+    # GUI file operation methods
+    def browse_files(self):
+        """Open file browser"""
+        filename = filedialog.askopenfilename(
+            title="Select a file",
+            filetypes=[("All files", "*.*"), ("Text files", "*.txt"), 
+                      ("Python files", "*.py"), ("JSON files", "*.json"),
+                      ("HTML files", "*.html"), ("CSS files", "*.css"),
+                      ("JavaScript files", "*.js")]
+        )
+        if filename:
+            self.add_action_log(f"Selected file: {filename}")
+            # Optionally read the file
+            if messagebox.askyesno("Read File", f"Read the selected file?\n{filename}"):
+                result = self.read_file(filename)
+                self.add_action_log(result)
+            
+    def read_file_gui(self):
+        """Read file through GUI"""
+        filename = filedialog.askopenfilename(
+            title="Select file to read",
+            filetypes=[("Text files", "*.txt"), ("Python files", "*.py"),
+                      ("JSON files", "*.json"), ("HTML files", "*.html"),
+                      ("All files", "*.*")]
+        )
+        if filename:
+            result = self.read_file(filename)
+            self.add_action_log(result)
+            
+    def write_file_gui(self):
+        """Write file through GUI"""
+        filename = filedialog.asksaveasfilename(
+            title="Select file to write",
+            filetypes=[("Text files", "*.txt"), ("Python files", "*.py"),
+                      ("JSON files", "*.json"), ("All files", "*.*")]
+        )
+        if filename:
+            content = simpledialog.askstring("File Content", "Enter content to write:", 
+                                           initialvalue="# Enter your content here")
+            if content is not None:  # User didn't cancel
+                result = self.write_file(filename, content)
+                self.add_action_log(result)
+                
+    def list_directory_gui(self):
+        """List directory through GUI"""
+        dirname = filedialog.askdirectory(title="Select directory to list")
+        if dirname:
+            result = self.list_directory(dirname)
+            self.add_action_log(result)
+    
+    def run(self):
+        """Start the GUI application"""
+        self.add_action_log("Starting Claude Computer Use Assistant with Web Features")
+        self.root.mainloop()
+
+if __name__ == "__main__":
+    app = ClaudeGUI()
+    app.run()

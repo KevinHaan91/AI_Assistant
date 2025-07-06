@@ -132,7 +132,7 @@ class MainWindow:
         )
         
         # Set initial paned window position
-        self.root.after(100, lambda: main_paned.sashpos(0, 700))
+        self.root.after(100, lambda: main_paned.sash_place(0, 700, 0))
         
     def show_startup_message(self):
         """Show startup message in chat"""
